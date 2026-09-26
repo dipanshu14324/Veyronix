@@ -1,0 +1,14 @@
+{
+    "label_to_int": {
+        "Agriculture_Biomass": 0,
+        "Forest_Natural": 1,
+        "Industrial": 2,
+        "Waste_Other": 3
+    },
+    "int_to_label": {
+        "0": "Agriculture_Biomass",
+        "1": "Forest_Natural",
+        "2": "Industrial",
+        "3": "Waste_Other"
+    }
+}

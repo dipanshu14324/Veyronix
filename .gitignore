@@ -1,0 +1,91 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+env/
+
+# Secrets
+.env
+.env.*
+!.env.example
+
+# Jupyter
+.ipynb_checkpoints/
+
+# VS Code
+.vscode/
+
+# Large Sentinel data
+*.SAFE/
+*.safe/
+*.jp2
+*.JP2
+*.zip
+
+# Sentinel local cache
+data/sentinel/
+data/raw_data/
+
+# Temporary/generated files
+*.log
+*.tmp
+*.cache
+
+# OS
+Thumbs.db
+.DS_Store
+
+# Large processed datasets
+data/processed_data/
+data/ml_ready/
+data/events/
+data/features/
+
+# Large geospatial files
+*.gpkg
+*.gpkg.zip
+
+# Sentinel files
+*.jp2
+*.JP2
+
+# Allow the deployment dataset to be tracked with Git LFS
+!data/ml_ready/
+!data/ml_ready/phase1_event_level_ml_dataset.csv
+
+# Generated ML datasets not required by deployed API
+data/ml_ready/source_label_candidates_sample.csv
+data/ml_ready/supervised_source_candidates.csv
+data/ml_ready/thermal_context_ml_ready_event_level.csv
+data/ml_ready/thermal_context_ml_ready_prototype.csv
+data/ml_ready/thermal_context_ml_ready_prototype_v2.csv
+
+# Local analysis/results
+data/results/
+data/verification/
+
+# ============================================================
+# VEYRONIX DEPLOYMENT DATA
+# ============================================================
+
+# Main event dataset is tracked using Git LFS
+!data/ml_ready/
+!data/ml_ready/phase1_event_level_ml_dataset.csv
+
+# Other generated ML datasets
+data/ml_ready/source_label_candidates_sample.csv
+data/ml_ready/supervised_source_candidates.csv
+data/ml_ready/thermal_context_ml_ready_event_level.csv
+data/ml_ready/thermal_context_ml_ready_prototype.csv
+data/ml_ready/thermal_context_ml_ready_prototype_v2.csv
+
+# Local analysis / verification
+data/results/
+data/verification/
+
+# Phase-1 raw/Sentinel processing data
+data/phase1_fire_data/
+# Local notebook datasets
+notebooks/data/

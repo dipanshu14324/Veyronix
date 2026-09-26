@@ -1,0 +1,15 @@
+[
+    "observation_count",
+    "mean_frp",
+    "peak_frp",
+    "total_frp",
+    "mean_brightness",
+    "persistent",
+    "historical_detection_count",
+    "historical_mean_frp",
+    "local_frp_deviation",
+    "historical_daily_activity",
+    "previously_detected",
+    "anomaly_score",
+    "is_anomaly"
+]

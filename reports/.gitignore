@@ -1,0 +1,83 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+env/
+
+# Secrets
+.env
+.env.*
+!.env.example
+
+# Jupyter
+.ipynb_checkpoints/
+
+# VS Code
+.vscode/
+
+# Large Sentinel data
+*.SAFE/
+*.safe/
+*.jp2
+*.JP2
+*.zip
+
+# Sentinel local cache
+data/sentinel/
+data/raw_data/
+
+# Temporary/generated files
+*.log
+*.tmp
+*.cache
+
+# OS
+Thumbs.db
+.DS_Store
+
+# Large geospatial data
+*.gpkg
+*.gpkg.zip
+
+# Large FIRMS datasets
+data/processed_data/
+data/events/
+data/features/
+data/ml_ready/
+
+# Sentinel data
+data/sentinel/
+*.jp2
+*.SAFE/
+*.safe/
+*.zip
+
+# Large processed datasets
+data/processed_data/
+data/ml_ready/
+data/events/
+data/features/
+
+# Large geospatial files
+*.gpkg
+*.gpkg.zip
+
+# Large Sentinel files
+*.jp2
+*.JP2
+
+# Large processed datasets
+data/processed_data/
+data/ml_ready/
+data/events/
+data/features/
+
+# Large geospatial files
+*.gpkg
+*.gpkg.zip
+
+# Sentinel files
+*.jp2
+*.JP2

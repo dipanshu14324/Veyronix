@@ -1,0 +1,16 @@
+fastapi
+uvicorn[standard]
+pydantic
+pandas
+numpy
+requests
+lightgbm
+scikit-learn
+joblib
+geopandas
+shapely
+pyproj
+rasterio
+folium
+streamlit
+streamlit-folium
