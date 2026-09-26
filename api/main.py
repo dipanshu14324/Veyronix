@@ -7,6 +7,7 @@ from functools import lru_cache
 import pandas as pd
 import sys
 
+
 # ============================================================
 # PROJECT PATHS
 # ============================================================
@@ -20,6 +21,7 @@ DATA_FILE = (
     / "phase1_event_level_ml_dataset.csv"
 )
 
+
 # ============================================================
 # PROJECT IMPORTS
 # ============================================================
@@ -27,6 +29,7 @@ DATA_FILE = (
 sys.path.append(str(BASE_DIR))
 
 from ml.predict_event import predict_event
+
 
 try:
     from geo.sentinel_manager import (
@@ -37,8 +40,11 @@ except Exception:
     get_sentinel_status = None
     get_sentinel_files = None
 
+
 try:
-    from geo.geo.sentinel_map import calculate_sentinel_indices
+    from geo.geo.sentinel_map import (
+        calculate_sentinel_indices,
+    )
 except Exception:
     calculate_sentinel_indices = None
 
@@ -93,10 +99,12 @@ class BatchEventRequest(BaseModel):
 @lru_cache(maxsize=1)
 def load_event_data():
     """
-    Load the ML-ready event dataset once per API process.
+    Loads the ML-ready event dataset once per process.
 
-    The lru_cache prevents repeatedly reading the 91 MB CSV
-    for every request.
+    Used by individual-event endpoints.
+
+    The /events endpoint intentionally does NOT use this
+    function because it uses chunked CSV processing.
     """
 
     if not DATA_FILE.exists():
@@ -127,7 +135,9 @@ def create_map_links(latitude, longitude):
         ),
         "openstreetmap": (
             "https://www.openstreetmap.org/"
-            f"?mlat={latitude}&mlon={longitude}&zoom=15"
+            f"?mlat={latitude}"
+            f"&mlon={longitude}"
+            f"&zoom=15"
         ),
     }
 
@@ -172,7 +182,9 @@ def get_feature_dict(row):
     ]
 
     return {
-        name: safe_float(row.get(name, 0))
+        name: safe_float(
+            row.get(name, 0)
+        )
         for name in feature_names
     }
 
@@ -300,7 +312,6 @@ def health():
         model_available = callable(
             predict_event
         )
-
     except Exception:
         model_available = False
 
@@ -325,7 +336,10 @@ def model_info():
 
     return {
         "model": "LightGBM",
-        "task": "Thermal Source Classification",
+
+        "task": (
+            "Thermal Source Classification"
+        ),
 
         "classes": [
             "Agriculture_Biomass",
@@ -356,9 +370,7 @@ def model_info():
 # ============================================================
 
 @app.post("/predict")
-def predict(
-    event: ThermalEvent
-):
+def predict(event: ThermalEvent):
 
     try:
 
@@ -406,6 +418,7 @@ def predict(
 
 # ============================================================
 # EVENTS
+# RENDER-SAFE CHUNKED IMPLEMENTATION
 # ============================================================
 
 @app.get("/events")
@@ -422,174 +435,299 @@ def events(
     limit: int = 100,
     sort_by: str = "latest",
 ):
+    """
+    Render-safe /events endpoint.
+
+    The 91 MB CSV is NOT loaded into one giant pandas
+    DataFrame.
+
+    Instead the file is processed in 50,000-row chunks.
+    Only the rows needed for the final response are retained.
+    """
 
     try:
 
-        # IMPORTANT:
-        # Do NOT use .copy() here.
-        #
-        # The dataset is approximately 91 MB.
-        # Copying the entire DataFrame can increase
-        # memory usage substantially on Render.
-
-        df = load_event_data()
-
-        # Protect the API from very large responses.
+        # ----------------------------------------------------
+        # LIMIT
+        # ----------------------------------------------------
 
         limit = max(
             1,
-            min(
-                int(limit),
-                300
-            )
-        )
-
-        # Boolean mask instead of creating
-        # multiple complete dataframe copies.
-
-        mask = pd.Series(
-            True,
-            index=df.index
+            min(int(limit), 300)
         )
 
         # ----------------------------------------------------
-        # DATE FILTER
+        # SORT MODE
         # ----------------------------------------------------
 
-        if (
-            date
-            and "event_date" in df.columns
-        ):
-
-            mask &= (
-                df["event_date"]
-                .astype(str)
-                .str.startswith(date)
-            )
+        if sort_by not in {
+            "latest",
+            "frp",
+        }:
+            sort_by = "latest"
 
         # ----------------------------------------------------
-        # FRP FILTERS
+        # REQUIRED COLUMNS
         # ----------------------------------------------------
 
-        if min_frp is not None:
-
-            mask &= (
-                pd.to_numeric(
-                    df["peak_frp"],
-                    errors="coerce"
-                )
-                .fillna(0)
-                >= min_frp
-            )
-
-        if max_frp is not None:
-
-            mask &= (
-                pd.to_numeric(
-                    df["peak_frp"],
-                    errors="coerce"
-                )
-                .fillna(0)
-                <= max_frp
-            )
-
-        # ----------------------------------------------------
-        # ANOMALY FILTER
-        # ----------------------------------------------------
-
-        if (
-            anomaly is not None
-            and "is_anomaly" in df.columns
-        ):
-
-            values = pd.to_numeric(
-                df["is_anomaly"],
-                errors="coerce"
-            ).fillna(0).astype(int)
-
-            mask &= (
-                values == int(anomaly)
-            )
-
-        # ----------------------------------------------------
-        # PERSISTENT FILTER
-        # ----------------------------------------------------
-
-        if (
-            persistent is not None
-            and "persistent" in df.columns
-        ):
-
-            values = pd.to_numeric(
-                df["persistent"],
-                errors="coerce"
-            ).fillna(0).astype(int)
-
-            mask &= (
-                values == int(persistent)
-            )
-
-        # ----------------------------------------------------
-        # LATITUDE FILTERS
-        # ----------------------------------------------------
-
-        if min_lat is not None:
-
-            mask &= (
-                pd.to_numeric(
-                    df["latitude"],
-                    errors="coerce"
-                )
-                .fillna(-999)
-                >= min_lat
-            )
-
-        if max_lat is not None:
-
-            mask &= (
-                pd.to_numeric(
-                    df["latitude"],
-                    errors="coerce"
-                )
-                .fillna(999)
-                <= max_lat
-            )
-
-        # ----------------------------------------------------
-        # LONGITUDE FILTERS
-        # ----------------------------------------------------
-
-        if min_lon is not None:
-
-            mask &= (
-                pd.to_numeric(
-                    df["longitude"],
-                    errors="coerce"
-                )
-                .fillna(-999)
-                >= min_lon
-            )
-
-        if max_lon is not None:
-
-            mask &= (
-                pd.to_numeric(
-                    df["longitude"],
-                    errors="coerce"
-                )
-                .fillna(999)
-                <= max_lon
-            )
-
-        # ----------------------------------------------------
-        # GET MATCHING INDEX
-        # ----------------------------------------------------
-
-        matching_indices = df.index[
-            mask
+        required_columns = [
+            "event_id",
+            "latitude",
+            "longitude",
+            "event_date",
+            "start_time",
+            "end_time",
+            "observation_count",
+            "mean_frp",
+            "peak_frp",
+            "total_frp",
+            "mean_brightness",
+            "persistent",
+            "historical_detection_count",
+            "historical_mean_frp",
+            "local_frp_deviation",
+            "historical_daily_activity",
+            "previously_detected",
+            "anomaly_score",
+            "is_anomaly",
         ]
 
-        if len(matching_indices) == 0:
+        # ----------------------------------------------------
+        # SMALL RESULT COLLECTION
+        # ----------------------------------------------------
+
+        collected = []
+
+        # ----------------------------------------------------
+        # CHUNKED CSV READING
+        # ----------------------------------------------------
+
+        for chunk in pd.read_csv(
+            DATA_FILE,
+            usecols=required_columns,
+            chunksize=50000,
+        ):
+
+            # ------------------------------------------------
+            # EVENT ID
+            # ------------------------------------------------
+
+            chunk["event_id"] = pd.to_numeric(
+                chunk["event_id"],
+                errors="coerce"
+            )
+
+            # ------------------------------------------------
+            # DATE
+            # ------------------------------------------------
+
+            if date:
+
+                chunk = chunk[
+                    chunk["event_date"]
+                    .astype(str)
+                    .str.startswith(date)
+                ]
+
+            # ------------------------------------------------
+            # FRP
+            # ------------------------------------------------
+
+            if (
+                min_frp is not None
+                or max_frp is not None
+                or sort_by == "frp"
+            ):
+
+                chunk["peak_frp"] = pd.to_numeric(
+                    chunk["peak_frp"],
+                    errors="coerce"
+                ).fillna(0)
+
+            if min_frp is not None:
+
+                chunk = chunk[
+                    chunk["peak_frp"]
+                    >= min_frp
+                ]
+
+            if max_frp is not None:
+
+                chunk = chunk[
+                    chunk["peak_frp"]
+                    <= max_frp
+                ]
+
+            # ------------------------------------------------
+            # ANOMALY
+            # ------------------------------------------------
+
+            if anomaly is not None:
+
+                values = pd.to_numeric(
+                    chunk["is_anomaly"],
+                    errors="coerce"
+                ).fillna(0).astype(int)
+
+                chunk = chunk[
+                    values
+                    == int(anomaly)
+                ]
+
+            # ------------------------------------------------
+            # PERSISTENT
+            # ------------------------------------------------
+
+            if persistent is not None:
+
+                values = pd.to_numeric(
+                    chunk["persistent"],
+                    errors="coerce"
+                ).fillna(0).astype(int)
+
+                chunk = chunk[
+                    values
+                    == int(persistent)
+                ]
+
+            # ------------------------------------------------
+            # LATITUDE
+            # ------------------------------------------------
+
+            if (
+                min_lat is not None
+                or max_lat is not None
+            ):
+
+                chunk["latitude"] = pd.to_numeric(
+                    chunk["latitude"],
+                    errors="coerce"
+                )
+
+            if min_lat is not None:
+
+                chunk = chunk[
+                    chunk["latitude"]
+                    >= min_lat
+                ]
+
+            if max_lat is not None:
+
+                chunk = chunk[
+                    chunk["latitude"]
+                    <= max_lat
+                ]
+
+            # ------------------------------------------------
+            # LONGITUDE
+            # ------------------------------------------------
+
+            if (
+                min_lon is not None
+                or max_lon is not None
+            ):
+
+                chunk["longitude"] = pd.to_numeric(
+                    chunk["longitude"],
+                    errors="coerce"
+                )
+
+            if min_lon is not None:
+
+                chunk = chunk[
+                    chunk["longitude"]
+                    >= min_lon
+                ]
+
+            if max_lon is not None:
+
+                chunk = chunk[
+                    chunk["longitude"]
+                    <= max_lon
+                ]
+
+            # ------------------------------------------------
+            # EMPTY CHUNK
+            # ------------------------------------------------
+
+            if chunk.empty:
+                continue
+
+            # ------------------------------------------------
+            # SORT EACH CHUNK
+            # ------------------------------------------------
+
+            if sort_by == "frp":
+
+                chunk = chunk.sort_values(
+                    "peak_frp",
+                    ascending=False
+                )
+
+            else:
+
+                chunk["_sort_date"] = (
+                    chunk["event_date"]
+                    .astype(str)
+                )
+
+                chunk = chunk.sort_values(
+                    "_sort_date",
+                    ascending=False
+                )
+
+            # ------------------------------------------------
+            # KEEP ONLY REQUIRED NUMBER
+            # ------------------------------------------------
+
+            chunk = chunk.head(limit)
+
+            collected.append(
+                chunk
+            )
+
+            # ------------------------------------------------
+            # MEMORY PROTECTION
+            # ------------------------------------------------
+
+            if len(collected) >= 10:
+
+                combined = pd.concat(
+                    collected,
+                    ignore_index=True
+                )
+
+                if sort_by == "frp":
+
+                    combined = (
+                        combined
+                        .sort_values(
+                            "peak_frp",
+                            ascending=False
+                        )
+                        .head(limit)
+                    )
+
+                else:
+
+                    combined = (
+                        combined
+                        .sort_values(
+                            "_sort_date",
+                            ascending=False
+                        )
+                        .head(limit)
+                    )
+
+                collected = [
+                    combined
+                ]
+
+        # ----------------------------------------------------
+        # NO RESULTS
+        # ----------------------------------------------------
+
+        if not collected:
 
             return {
                 "status": "success",
@@ -598,59 +736,57 @@ def events(
             }
 
         # ----------------------------------------------------
-        # SORT
+        # COMBINE SMALL RESULTS
+        # ----------------------------------------------------
+
+        result_df = pd.concat(
+            collected,
+            ignore_index=True
+        )
+
+        # ----------------------------------------------------
+        # FINAL SORT
         # ----------------------------------------------------
 
         if sort_by == "frp":
 
-            sort_values = pd.to_numeric(
-                df.loc[
-                    matching_indices,
-                    "peak_frp"
-                ],
+            result_df["peak_frp"] = pd.to_numeric(
+                result_df["peak_frp"],
                 errors="coerce"
             ).fillna(0)
 
-            matching_indices = (
-                sort_values
+            result_df = (
+                result_df
                 .sort_values(
+                    "peak_frp",
                     ascending=False
                 )
                 .head(limit)
-                .index
             )
 
         else:
 
-            sort_column = (
-                "event_date"
-                if "event_date" in df.columns
-                else "event_id"
+            result_df["_sort_date"] = (
+                result_df["event_date"]
+                .astype(str)
             )
 
-            sort_values = df.loc[
-                matching_indices,
-                sort_column
-            ]
-
-            matching_indices = (
-                sort_values
+            result_df = (
+                result_df
                 .sort_values(
+                    "_sort_date",
                     ascending=False
                 )
                 .head(limit)
-                .index
             )
 
         # ----------------------------------------------------
-        # SERIALIZE ONLY REQUESTED ROWS
+        # SERIALIZE
         # ----------------------------------------------------
 
         result = [
-            serialize_event(
-                df.loc[index]
-            )
-            for index in matching_indices
+            serialize_event(row)
+            for _, row in result_df.iterrows()
         ]
 
         return {
@@ -658,6 +794,24 @@ def events(
             "count": len(result),
             "events": result,
         }
+
+    except FileNotFoundError as exc:
+
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                f"Dataset not found: {exc}"
+            ),
+        )
+
+    except ValueError as exc:
+
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Invalid event query: {exc}"
+            ),
+        )
 
     except Exception as exc:
 
@@ -686,7 +840,7 @@ def predict_single_event(
 
         raise HTTPException(
             status_code=500,
-            detail=str(exc),
+            detail=str(exc)
         )
 
     event_df = df[
@@ -701,7 +855,7 @@ def predict_single_event(
             detail=(
                 f"Event ID {request.event_id} "
                 "not found"
-            ),
+            )
         )
 
     row = event_df.iloc[0]
@@ -722,7 +876,7 @@ def predict_single_event(
             status_code=500,
             detail=(
                 f"ML prediction failed: {exc}"
-            ),
+            )
         )
 
     latitude = safe_float(
@@ -809,26 +963,36 @@ def predict_single_event(
 
         "prediction": {
 
-            "predicted_source": prediction[
-                "predicted_source"
-            ],
+            "predicted_source": (
+                prediction[
+                    "predicted_source"
+                ]
+            ),
 
-            "source": prediction[
-                "predicted_source"
-            ],
+            "source": (
+                prediction[
+                    "predicted_source"
+                ]
+            ),
 
-            "confidence": prediction[
-                "confidence"
-            ],
+            "confidence": (
+                prediction[
+                    "confidence"
+                ]
+            ),
 
-            "probabilities": prediction[
-                "probabilities"
-            ],
+            "probabilities": (
+                prediction[
+                    "probabilities"
+                ]
+            ),
         },
 
-        "probabilities": prediction[
-            "probabilities"
-        ],
+        "probabilities": (
+            prediction[
+                "probabilities"
+            ]
+        ),
 
         "anomaly": {
 
@@ -866,7 +1030,7 @@ def predict_batch(
 
         raise HTTPException(
             status_code=500,
-            detail=str(exc),
+            detail=str(exc)
         )
 
     event_df = df[
@@ -934,17 +1098,23 @@ def predict_batch(
                 )
             ),
 
-            "source": prediction[
-                "predicted_source"
-            ],
+            "source": (
+                prediction[
+                    "predicted_source"
+                ]
+            ),
 
-            "confidence": prediction[
-                "confidence"
-            ],
+            "confidence": (
+                prediction[
+                    "confidence"
+                ]
+            ),
 
-            "probabilities": prediction[
-                "probabilities"
-            ],
+            "probabilities": (
+                prediction[
+                    "probabilities"
+                ]
+            ),
 
             "anomaly": bool(
                 safe_int(
@@ -1013,7 +1183,7 @@ def event_analysis(
 
         raise HTTPException(
             status_code=500,
-            detail=str(exc),
+            detail=str(exc)
         )
 
     event_df = df[
@@ -1028,7 +1198,7 @@ def event_analysis(
             detail=(
                 f"Event {event_id} "
                 "not found"
-            ),
+            )
         )
 
     row = event_df.iloc[0]
@@ -1072,8 +1242,10 @@ def event_analysis(
 
         try:
 
-            sentinel = get_sentinel_status(
-                event_id
+            sentinel = (
+                get_sentinel_status(
+                    event_id
+                )
             )
 
         except Exception:
@@ -1104,20 +1276,23 @@ def event_analysis(
 
         "ml_prediction": {
 
-            "predicted_source":
+            "predicted_source": (
                 prediction[
                     "predicted_source"
-                ],
+                ]
+            ),
 
-            "confidence":
+            "confidence": (
                 prediction[
                     "confidence"
-                ],
+                ]
+            ),
 
-            "probabilities":
+            "probabilities": (
                 prediction[
                     "probabilities"
-                ],
+                ]
+            ),
         },
 
         "anomaly": {
@@ -1130,12 +1305,13 @@ def event_analysis(
                 )
             ),
 
-            "anomaly_score":
+            "anomaly_score": (
                 safe_float(
                     row.get(
                         "anomaly_score"
                     )
-                ),
+                )
+            ),
         },
 
         "sentinel": sentinel,
@@ -1190,7 +1366,7 @@ def sentinel_status(
 
         raise HTTPException(
             status_code=500,
-            detail=str(exc),
+            detail=str(exc)
         )
 
 
@@ -1212,7 +1388,7 @@ def sentinel_files(
             detail=(
                 "Sentinel manager "
                 "unavailable"
-            ),
+            )
         )
 
     try:
@@ -1234,14 +1410,14 @@ def sentinel_files(
 
         raise HTTPException(
             status_code=404,
-            detail=str(exc),
+            detail=str(exc)
         )
 
     except Exception as exc:
 
         raise HTTPException(
             status_code=500,
-            detail=str(exc),
+            detail=str(exc)
         )
 
 
@@ -1263,7 +1439,7 @@ def sentinel_evidence(
             detail=(
                 "Sentinel processing "
                 "unavailable"
-            ),
+            )
         )
 
     try:
@@ -1282,7 +1458,7 @@ def sentinel_evidence(
                 detail=(
                     f"Event {event_id} "
                     "not found"
-                ),
+                )
             )
 
         row = event_df.iloc[0]
@@ -1335,7 +1511,7 @@ def sentinel_evidence(
 
         raise HTTPException(
             status_code=500,
-            detail=str(exc),
+            detail=str(exc)
         )
 
 
@@ -1363,13 +1539,9 @@ def find_visualization(
     event_dir = (
 
         BASE_DIR
-
         / "data"
-
         / "sentinel"
-
         / f"event_{event_id}"
-
         / "visualizations"
 
     )
@@ -1379,33 +1551,22 @@ def find_visualization(
         return None
 
     name = VISUALIZATION_TYPES.get(
-
         visualization_type,
-
         visualization_type
-
     )
 
     candidates = list(
-
         event_dir.glob(
-
             f"*_{name}.png"
-
         )
-
     )
 
     if not candidates:
 
         candidates = list(
-
             event_dir.glob(
-
                 f"*{name}*.png"
-
             )
-
         )
 
     if not candidates:
@@ -1429,11 +1590,8 @@ def sentinel_visualizations(
     ):
 
         path = find_visualization(
-
             event_id,
-
             visualization_type
-
         )
 
         result[
@@ -1447,7 +1605,6 @@ def sentinel_visualizations(
         "event_id": event_id,
 
         "visualizations": result,
-
     }
 
 
@@ -1465,51 +1622,34 @@ def sentinel_visualization(
     ):
 
         raise HTTPException(
-
             status_code=400,
-
             detail=(
-
                 "Visualization must be "
                 "one of: ndvi, nbr, "
                 "scl, false_color"
-
             ),
-
         )
 
     path = find_visualization(
-
         event_id,
-
         visualization_type
-
     )
 
     if path is None:
 
         raise HTTPException(
-
             status_code=404,
-
             detail=(
-
                 f"{visualization_type} "
                 f"visualization not found "
                 f"for event {event_id}"
-
             ),
-
         )
 
     return FileResponse(
-
         path=str(path),
-
         media_type="image/png",
-
         filename=path.name,
-
     )
 
 
@@ -1550,7 +1690,6 @@ def server_info():
 
             "events":
                 event_count,
-
         },
 
         "model": {
@@ -1561,7 +1700,6 @@ def server_info():
                 callable(
                     predict_event
                 ),
-
         },
 
         "sentinel": {
@@ -1569,9 +1707,7 @@ def server_info():
             "enabled":
                 calculate_sentinel_indices
                 is not None,
-
         },
-
     }
 
 
@@ -1584,13 +1720,9 @@ if __name__ == "__main__":
     import uvicorn
 
     uvicorn.run(
-
         "api.main:app",
-
         host="127.0.0.1",
-
         port=8000,
-
         reload=True,
-
     )
+
