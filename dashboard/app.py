@@ -1,4 +1,3 @@
-
 # ============================================================
 # VEYRONIX AI
 # SIH26162
@@ -14,6 +13,7 @@
 # ============================================================
 
 import os
+import time
 from pathlib import Path
 
 import numpy as np
@@ -74,20 +74,64 @@ OSM_GPKG_CANDIDATES = [
 # API CONFIGURATION
 # ============================================================
 
+# IMPORTANT:
+# Streamlit Cloud should use the Render FastAPI backend.
+#
+# If API_URL exists in Streamlit Secrets/environment,
+# it will be used automatically.
+#
+# Otherwise this Render URL is used.
 API_URL = os.getenv(
     "API_URL",
-    "https://veyronix.onrender.com"
+    "https://veyronix.onrender.com",
 ).rstrip("/")
+
 
 VEYRONIX_API_KEY = os.getenv(
     "VEYRONIX_API_KEY",
     "",
-)
+).strip()
+
 
 API_HEADERS = {}
 
 if VEYRONIX_API_KEY:
     API_HEADERS["X-API-Key"] = VEYRONIX_API_KEY
+
+
+# ============================================================
+# REQUEST CONFIGURATION
+# ============================================================
+
+API_CONNECT_TIMEOUT = 10
+API_READ_TIMEOUT = 60
+
+# Render Free services can sleep.
+# Multiple attempts give Render time to wake.
+API_RETRIES = 3
+
+API_RETRY_DELAYS = [
+    2,
+    8,
+    15,
+]
+
+
+# ============================================================
+# SESSION STATE
+# ============================================================
+
+if "api_last_status" not in st.session_state:
+    st.session_state["api_last_status"] = "Not tested"
+
+if "api_last_error" not in st.session_state:
+    st.session_state["api_last_error"] = ""
+
+if "api_last_endpoint" not in st.session_state:
+    st.session_state["api_last_endpoint"] = ""
+
+if "selected_event" not in st.session_state:
+    st.session_state["selected_event"] = 84118
 
 
 # ============================================================
@@ -421,14 +465,11 @@ def reconcile_evidence(
     )
 
     normalized_osm = [
-        normalize_source(
-            x
-        )
+        normalize_source(x)
         for x in osm_sources
         if x is not None
     ]
 
-    # Remove duplicates while preserving order
     normalized_osm = list(
         dict.fromkeys(
             normalized_osm
@@ -549,39 +590,187 @@ def reconcile_evidence(
 
 
 # ============================================================
-# API
+# API REQUEST ENGINE
 # ============================================================
 
 def api_request(
     method,
     endpoint,
+    retries=API_RETRIES,
+    retry_delays=None,
     **kwargs,
 ):
 
-    kwargs.setdefault(
+    if retry_delays is None:
+        retry_delays = API_RETRY_DELAYS
+
+    timeout = kwargs.pop(
         "timeout",
-        30,
+        (
+            API_CONNECT_TIMEOUT,
+            API_READ_TIMEOUT,
+        ),
     )
 
-    kwargs["headers"] = {
+    request_headers = {
         **API_HEADERS,
-        **kwargs.get(
+        **kwargs.pop(
             "headers",
             {},
         ),
     }
 
-    try:
+    url = f"{API_URL}{endpoint}"
 
-        return requests.request(
-            method,
-            f"{API_URL}{endpoint}",
-            **kwargs,
-        )
+    last_error = None
+    last_status = None
 
-    except Exception:
+    for attempt in range(
+        retries
+    ):
 
-        return None
+        try:
+
+            response = requests.request(
+                method=method,
+                url=url,
+                headers=request_headers,
+                timeout=timeout,
+                **kwargs,
+            )
+
+            last_status = response.status_code
+
+            st.session_state[
+                "api_last_endpoint"
+            ] = endpoint
+
+            st.session_state[
+                "api_last_status"
+            ] = str(
+                response.status_code
+            )
+
+            # ------------------------------------------------
+            # Successful response
+            # ------------------------------------------------
+
+            if response.ok:
+
+                st.session_state[
+                    "api_last_error"
+                ] = ""
+
+                return response
+
+            # ------------------------------------------------
+            # Render / gateway errors
+            # ------------------------------------------------
+
+            if response.status_code in {
+                502,
+                503,
+                504,
+            }:
+
+                last_error = (
+                    f"HTTP {response.status_code} "
+                    f"from Render"
+                )
+
+            else:
+
+                try:
+                    body = response.text[:500]
+                except Exception:
+                    body = ""
+
+                last_error = (
+                    f"HTTP {response.status_code}"
+                    + (
+                        f": {body}"
+                        if body
+                        else ""
+                    )
+                )
+
+            # Retry gateway failures
+
+            if (
+                response.status_code
+                not in {
+                    502,
+                    503,
+                    504,
+                }
+            ):
+
+                break
+
+        except requests.exceptions.Timeout:
+
+            last_error = (
+                "Request timed out while "
+                "waiting for FastAPI."
+            )
+
+        except requests.exceptions.ConnectionError:
+
+            last_error = (
+                "Could not connect to "
+                "FastAPI/Render."
+            )
+
+        except requests.exceptions.RequestException as exc:
+
+            last_error = (
+                f"Request error: {exc}"
+            )
+
+        except Exception as exc:
+
+            last_error = (
+                f"Unexpected API error: {exc}"
+            )
+
+        # ----------------------------------------------------
+        # Retry delay
+        # ----------------------------------------------------
+
+        if attempt < retries - 1:
+
+            if attempt < len(
+                retry_delays
+            ):
+
+                delay = retry_delays[
+                    attempt
+                ]
+
+            else:
+
+                delay = 10
+
+            time.sleep(
+                delay
+            )
+
+    st.session_state[
+        "api_last_error"
+    ] = (
+        last_error
+        or "Unknown API error"
+    )
+
+    st.session_state[
+        "api_last_status"
+    ] = (
+        str(last_status)
+        if last_status
+        else "Connection failed"
+    )
+
+    return None
 
 
 # ============================================================
@@ -662,11 +851,9 @@ def find_osm_gpkg():
     for path in OSM_GPKG_CANDIDATES:
 
         if not path.exists():
-
             continue
 
         if path.is_file():
-
             return path
 
         nested = list(
@@ -674,7 +861,6 @@ def find_osm_gpkg():
         )
 
         if nested:
-
             return nested[0]
 
     return None
@@ -724,7 +910,6 @@ def load_osm_landuse():
             ]
 
             if not possible:
-
                 return None
 
             target = possible[0]
@@ -735,7 +920,6 @@ def load_osm_landuse():
         )
 
         if gdf.empty:
-
             return None
 
         if gdf.crs is None:
@@ -762,7 +946,6 @@ def osm_source_from_fclass(
 ):
 
     if value is None:
-
         return "Unknown"
 
     value = str(
@@ -823,7 +1006,6 @@ def get_osm_spatial_evidence(
     gdf = load_osm_landuse()
 
     if gdf is None:
-
         return pd.DataFrame()
 
     try:
@@ -831,13 +1013,8 @@ def get_osm_spatial_evidence(
         import geopandas as gpd
         from shapely.geometry import Point
 
-        latitude = float(
-            latitude
-        )
-
-        longitude = float(
-            longitude
-        )
+        latitude = float(latitude)
+        longitude = float(longitude)
 
         point_wgs84 = Point(
             longitude,
@@ -871,7 +1048,6 @@ def get_osm_spatial_evidence(
         ].copy()
 
         if bbox.empty:
-
             return pd.DataFrame()
 
         bbox = bbox.to_crs(
@@ -897,7 +1073,6 @@ def get_osm_spatial_evidence(
         ].copy()
 
         if bbox.empty:
-
             return pd.DataFrame()
 
         bbox = bbox.sort_values(
@@ -955,57 +1130,23 @@ def get_osm_spatial_evidence(
 # ============================================================
 
 @st.cache_data(
-    ttl=15
+    ttl=15,
+    show_spinner=False,
 )
 def api_health():
 
     response = api_request(
         "GET",
         "/health",
-        timeout=5,
+        retries=3,
+        timeout=(
+            API_CONNECT_TIMEOUT,
+            20,
+        ),
     )
 
     if response is None:
-
         return {}
-
-    try:
-
-        return response.json()
-
-    except Exception:
-
-        return {}
-
-
-# ============================================================
-# EVENTS
-# ============================================================
-
-@st.cache_data(
-    ttl=30
-)
-def get_events_from_api(
-    limit=100
-):
-
-    response = api_request(
-        "GET",
-        "/events",
-        params={
-            "limit": limit,
-            "sort_by": "latest",
-        },
-        timeout=30,
-    )
-
-    if response is None:
-
-        return pd.DataFrame()
-
-    if not response.ok:
-
-        return pd.DataFrame()
 
     try:
 
@@ -1015,26 +1156,128 @@ def get_events_from_api(
             data,
             dict,
         ):
+            return data
 
-            if "events" in data:
+    except Exception:
+        pass
 
-                data = data[
-                    "events"
-                ]
+    return {}
 
-            elif "data" in data:
 
-                data = data[
-                    "data"
-                ]
+# ============================================================
+# LOCAL FALLBACK EVENTS
+# ============================================================
 
-        return pd.DataFrame(
-            data
-        )
+def get_local_events(
+    limit=100
+):
+
+    if ml_df.empty:
+        return pd.DataFrame()
+
+    try:
+
+        df = ml_df.copy()
+
+        if "event_date" in df.columns:
+
+            df["event_date"] = pd.to_datetime(
+                df["event_date"],
+                errors="coerce",
+            )
+
+        if "event_id" in df.columns:
+
+            df["event_id"] = pd.to_numeric(
+                df["event_id"],
+                errors="coerce",
+            )
+
+        if "event_date" in df.columns:
+
+            df = df.sort_values(
+                "event_date",
+                ascending=False,
+            )
+
+        return df.head(
+            int(limit)
+        ).copy()
 
     except Exception:
 
         return pd.DataFrame()
+
+
+# ============================================================
+# EVENTS FROM FASTAPI
+# ============================================================
+
+@st.cache_data(
+    ttl=30,
+    show_spinner=False,
+)
+def get_events_from_api(
+    limit=100
+):
+
+    response = api_request(
+        "GET",
+        "/events",
+        params={
+            "limit": int(limit),
+            "sort_by": "latest",
+        },
+        retries=3,
+        timeout=(
+            API_CONNECT_TIMEOUT,
+            API_READ_TIMEOUT,
+        ),
+    )
+
+    if response is not None:
+
+        try:
+
+            data = response.json()
+
+            if isinstance(
+                data,
+                dict,
+            ):
+
+                if "events" in data:
+
+                    data = data[
+                        "events"
+                    ]
+
+                elif "data" in data:
+
+                    data = data[
+                        "data"
+                    ]
+
+            df = pd.DataFrame(
+                data
+            )
+
+            if not df.empty:
+                return df
+
+        except Exception:
+            pass
+
+    # --------------------------------------------------------
+    # IMPORTANT FALLBACK
+    #
+    # If Render temporarily returns 502/503/504,
+    # the dashboard can still display local event data.
+    # --------------------------------------------------------
+
+    return get_local_events(
+        limit
+    )
 
 
 # ============================================================
@@ -1053,23 +1296,23 @@ def get_prediction(
                 event_id
             )
         },
-        timeout=30,
+        retries=3,
+        timeout=(
+            API_CONNECT_TIMEOUT,
+            API_READ_TIMEOUT,
+        ),
     )
 
     if response is None:
-
         return None
 
     if not response.ok:
-
         return None
 
     try:
-
         return response.json()
 
     except Exception:
-
         return None
 
 
@@ -1084,23 +1327,23 @@ def get_event_analysis(
     response = api_request(
         "GET",
         f"/event-analysis/{int(event_id)}",
-        timeout=30,
+        retries=3,
+        timeout=(
+            API_CONNECT_TIMEOUT,
+            API_READ_TIMEOUT,
+        ),
     )
 
     if response is None:
-
         return None
 
     if not response.ok:
-
         return None
 
     try:
-
         return response.json()
 
     except Exception:
-
         return None
 
 
@@ -1115,7 +1358,11 @@ def get_sentinel_evidence(
     response = api_request(
         "GET",
         f"/sentinel/{int(event_id)}/evidence",
-        timeout=30,
+        retries=2,
+        timeout=(
+            API_CONNECT_TIMEOUT,
+            API_READ_TIMEOUT,
+        ),
     )
 
     if (
@@ -1165,7 +1412,6 @@ def get_sentinel_evidence(
                 return data
 
         except Exception:
-
             pass
 
     analysis = get_event_analysis(
@@ -1227,7 +1473,11 @@ def get_sentinel_visualizations(
                 f"/visualizations/"
                 f"{visualization_type}"
             ),
-            timeout=30,
+            retries=2,
+            timeout=(
+                API_CONNECT_TIMEOUT,
+                API_READ_TIMEOUT,
+            ),
         )
 
         if (
@@ -1272,7 +1522,6 @@ def get_sentinel_visualizations(
     ):
 
         if key in result:
-
             continue
 
         if path.exists():
@@ -1284,7 +1533,6 @@ def get_sentinel_visualizations(
                 ] = path.read_bytes()
 
             except Exception:
-
                 pass
 
     return result
@@ -1352,8 +1600,19 @@ with st.sidebar:
     else:
 
         st.error(
-            "FastAPI offline"
+            "FastAPI unavailable"
         )
+
+        if st.session_state.get(
+            "api_last_error"
+        ):
+
+            st.caption(
+                (
+                    "API: "
+                    f"{st.session_state['api_last_status']}"
+                )
+            )
 
     if health.get(
         "model_available",
@@ -1383,7 +1642,7 @@ with st.sidebar:
 
         st.info(
             f"{len(ml_df):,} "
-            "thermal events loaded"
+            "thermal events loaded locally"
         )
 
     else:
@@ -1408,6 +1667,10 @@ with st.sidebar:
         )
 
     st.divider()
+
+    st.caption(
+        f"API: {API_URL}"
+    )
 
     st.caption(
         "SIH26162"
@@ -1538,11 +1801,42 @@ if page == "Command Center":
     if recent.empty:
 
         st.warning(
-            "Could not retrieve recent "
-            "events from FastAPI."
+            "No recent events are currently available."
         )
 
+        if st.session_state.get(
+            "api_last_error"
+        ):
+
+            st.caption(
+                (
+                    "FastAPI status: "
+                    f"{st.session_state['api_last_status']} — "
+                    f"{st.session_state['api_last_error']}"
+                )
+            )
+
     else:
+
+        # Detect whether we are showing local fallback
+        # instead of the API response.
+
+        if (
+            not api_connected
+            or st.session_state.get(
+                "api_last_status"
+            ) in {
+                "502",
+                "503",
+                "504",
+                "Connection failed",
+            }
+        ):
+
+            st.info(
+                "FastAPI is temporarily unavailable. "
+                "Showing the local thermal-event dataset."
+            )
 
         display = recent.copy()
 
@@ -1618,7 +1912,12 @@ if page == "Command Center":
     selected_event = st.number_input(
         "Event ID",
         min_value=1,
-        value=84118,
+        value=int(
+            st.session_state.get(
+                "selected_event",
+                84118,
+            )
+        ),
         step=1,
     )
 
@@ -1656,9 +1955,20 @@ elif page == "Fire Map":
     if recent.empty:
 
         st.warning(
-            "No event data available "
-            "from FastAPI."
+            "No event data is currently available."
         )
+
+        if st.session_state.get(
+            "api_last_error"
+        ):
+
+            st.caption(
+                (
+                    "FastAPI: "
+                    f"{st.session_state['api_last_status']} — "
+                    f"{st.session_state['api_last_error']}"
+                )
+            )
 
         st.stop()
 
@@ -1732,13 +2042,19 @@ elif page == "Fire Map":
 
     else:
 
-        center_lat = filtered[
-            "latitude"
-        ].mean()
+        center_lat = pd.to_numeric(
+            filtered[
+                "latitude"
+            ],
+            errors="coerce",
+        ).mean()
 
-        center_lon = filtered[
-            "longitude"
-        ].mean()
+        center_lon = pd.to_numeric(
+            filtered[
+                "longitude"
+            ],
+            errors="coerce",
+        ).mean()
 
         fmap = folium.Map(
             location=[
@@ -1782,7 +2098,6 @@ elif page == "Fire Map":
             )
 
             if pd.isna(lat) or pd.isna(lon):
-
                 continue
 
             anomaly = safe_bool(
@@ -1921,9 +2236,25 @@ elif page == "Event Investigation":
         if prediction is None:
 
             st.error(
-                "Prediction failed. "
-                "Make sure FastAPI is running "
-                "and the event exists."
+                "Prediction could not be retrieved "
+                "from FastAPI."
+            )
+
+            if st.session_state.get(
+                "api_last_error"
+            ):
+
+                st.warning(
+                    (
+                        f"FastAPI returned "
+                        f"{st.session_state['api_last_status']}. "
+                        f"{st.session_state['api_last_error']}"
+                    )
+                )
+
+            st.info(
+                "If Render recently went to sleep, "
+                "wait a few seconds and run the investigation again."
             )
 
             st.stop()
@@ -2043,7 +2374,7 @@ elif page == "Event Investigation":
         )
 
         # ====================================================
-        # SOURCE ATTRIBUTION HEADER
+        # SOURCE ATTRIBUTION
         # ====================================================
 
         st.subheader(
@@ -2083,7 +2414,7 @@ elif page == "Event Investigation":
         )
 
         # ====================================================
-        # EVIDENCE RECONCILIATION PANEL
+        # EVIDENCE RECONCILIATION
         # ====================================================
 
         st.subheader(
@@ -2330,6 +2661,12 @@ elif page == "Event Investigation":
                 f"[🗺️ Open in OpenStreetMap]({osm_url})"
             )
 
+            st.caption(
+                "Location represents a satellite-detected "
+                "thermal hotspot, not necessarily an exact "
+                "building-level fire location."
+            )
+
         # ====================================================
         # OSM EVIDENCE
         # ====================================================
@@ -2339,10 +2676,6 @@ elif page == "Event Investigation":
         )
 
         osm_found = False
-
-        # ----------------------------------------------------
-        # Exact candidate
-        # ----------------------------------------------------
 
         if (
             not osm_df.empty
@@ -2394,10 +2727,6 @@ elif page == "Event Investigation":
                     use_container_width=True,
                     hide_index=True,
                 )
-
-        # ----------------------------------------------------
-        # Spatial fallback
-        # ----------------------------------------------------
 
         if (
             not osm_found
@@ -2707,8 +3036,7 @@ elif page == "Event Investigation":
 
                 display_sentinel = {
                     key: value
-                    for key, value
-                    in sentinel.items()
+                    for key, value in sentinel.items()
                     if not str(
                         key
                     ).startswith("_")
@@ -3320,4 +3648,3 @@ st.caption(
     "🔥 VEYRONIX AI • SIH26162 • "
     "NASA FIRMS + OSM + Sentinel-2 + LightGBM"
 )
-
