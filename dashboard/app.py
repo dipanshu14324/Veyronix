@@ -76,7 +76,7 @@ OSM_GPKG_CANDIDATES = [
 
 API_URL = os.getenv(
     "API_URL",
-    "http://127.0.0.1:8000",
+    "https://veyronix.onrender.com"
 ).rstrip("/")
 
 VEYRONIX_API_KEY = os.getenv(
