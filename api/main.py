@@ -19,7 +19,7 @@ from pydantic import BaseModel
 # ============================================================
 
 APP_NAME = "VEYRONIX AI"
-APP_VERSION = "2.2.0"
+APP_VERSION = "2.3.0"
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
@@ -54,20 +54,6 @@ app = FastAPI(
 # ============================================================
 # CORS
 # ============================================================
-#
-# IMPORTANT:
-# allow_origins=["*"] is intentionally used for the current
-# SIH prototype so that:
-#
-# localhost React
-# Netlify frontend
-# Streamlit
-# other demo clients
-#
-# can communicate with the Render API.
-#
-# allow_credentials must remain False when using "*".
-#
 
 app.add_middleware(
     CORSMiddleware,
@@ -83,10 +69,17 @@ app.add_middleware(
 # ============================================================
 
 MODEL: Any = None
+
 DATASET_AVAILABLE = False
+
 MODEL_AVAILABLE = False
 
 EVENT_CACHE: pd.DataFrame | None = None
+
+
+# ============================================================
+# MODEL FEATURES
+# ============================================================
 
 FEATURE_NAMES = [
     "observation_count",
@@ -103,6 +96,11 @@ FEATURE_NAMES = [
     "anomaly_score",
     "is_anomaly",
 ]
+
+
+# ============================================================
+# EVENT COLUMNS
+# ============================================================
 
 EVENT_COLUMNS = [
     "event_id",
@@ -159,8 +157,13 @@ class BatchEventRequest(BaseModel):
 # UTILITY FUNCTIONS
 # ============================================================
 
-def safe_float(value: Any, default: float = 0.0) -> float:
+def safe_float(
+    value: Any,
+    default: float = 0.0,
+) -> float:
+
     try:
+
         number = float(value)
 
         if np.isfinite(number):
@@ -169,17 +172,28 @@ def safe_float(value: Any, default: float = 0.0) -> float:
         return default
 
     except Exception:
+
         return default
 
 
-def safe_int(value: Any, default: int = 0) -> int:
+def safe_int(
+    value: Any,
+    default: int = 0,
+) -> int:
+
     try:
+
         return int(value)
+
     except Exception:
+
         return default
 
 
-def safe_bool(value: Any) -> bool:
+def safe_bool(
+    value: Any,
+) -> bool:
+
     if isinstance(value, bool):
         return value
 
@@ -187,6 +201,7 @@ def safe_bool(value: Any) -> bool:
         return bool(value)
 
     if isinstance(value, str):
+
         return value.lower().strip() in {
             "true",
             "1",
@@ -203,15 +218,22 @@ def clamp(
     maximum: float,
 ) -> float:
 
-    return max(minimum, min(maximum, value))
+    return max(
+        minimum,
+        min(maximum, value),
+    )
 
 
-def json_safe(value: Any) -> Any:
+def json_safe(
+    value: Any,
+) -> Any:
 
     if isinstance(value, np.integer):
+
         return int(value)
 
     if isinstance(value, np.floating):
+
         value = float(value)
 
         if not np.isfinite(value):
@@ -220,20 +242,37 @@ def json_safe(value: Any) -> Any:
         return value
 
     if isinstance(value, np.ndarray):
+
         return value.tolist()
 
     if isinstance(value, pd.Timestamp):
+
+        if pd.isna(value):
+            return None
+
         return value.isoformat()
 
-    if pd.isna(value):
+    if value is None:
         return None
+
+    try:
+
+        if pd.isna(value):
+            return None
+
+    except Exception:
+        pass
 
     return value
 
 
-def dataframe_to_records(df: pd.DataFrame) -> list[dict[str, Any]]:
+def dataframe_to_records(
+    df: pd.DataFrame,
+) -> list[dict[str, Any]]:
 
-    records = df.to_dict(orient="records")
+    records = df.to_dict(
+        orient="records"
+    )
 
     cleaned = []
 
@@ -244,9 +283,234 @@ def dataframe_to_records(df: pd.DataFrame) -> list[dict[str, Any]]:
             for key, value in record.items()
         }
 
-        cleaned.append(cleaned_record)
+        cleaned.append(
+            cleaned_record
+        )
 
     return cleaned
+
+
+# ============================================================
+# FRONTEND EVENT FORMAT
+# ============================================================
+
+def format_event(
+    event: dict[str, Any],
+) -> dict[str, Any]:
+
+    event_id = safe_int(
+        event.get("event_id")
+    )
+
+    latitude = safe_float(
+        event.get("latitude")
+    )
+
+    longitude = safe_float(
+        event.get("longitude")
+    )
+
+    event_date = event.get(
+        "event_date"
+    )
+
+    start_time = event.get(
+        "start_time"
+    )
+
+    end_time = event.get(
+        "end_time"
+    )
+
+    # --------------------------------------------------------
+    # Event date
+    # --------------------------------------------------------
+
+    if isinstance(
+        event_date,
+        pd.Timestamp,
+    ):
+
+        if pd.isna(event_date):
+
+            event_date_string = None
+
+        else:
+
+            event_date_string = str(
+                event_date.date()
+            )
+
+    elif event_date is None:
+
+        event_date_string = None
+
+    else:
+
+        event_date_string = str(
+            event_date
+        )
+
+    # --------------------------------------------------------
+    # Start time
+    # --------------------------------------------------------
+
+    if (
+        start_time is None
+        or pd.isna(start_time)
+    ):
+
+        start_time_string = None
+
+    else:
+
+        start_time_string = str(
+            start_time
+        )
+
+    # --------------------------------------------------------
+    # End time
+    # --------------------------------------------------------
+
+    if (
+        end_time is None
+        or pd.isna(end_time)
+    ):
+
+        end_time_string = None
+
+    else:
+
+        end_time_string = str(
+            end_time
+        )
+
+    # --------------------------------------------------------
+    # Final frontend object
+    # --------------------------------------------------------
+
+    return {
+        "event_id": event_id,
+
+        "latitude": latitude,
+
+        "longitude": longitude,
+
+        "event_date":
+            event_date_string,
+
+        "start_time":
+            start_time_string,
+
+        "end_time":
+            end_time_string,
+
+        "observation_count":
+            safe_float(
+                event.get(
+                    "observation_count"
+                )
+            ),
+
+        "mean_frp":
+            safe_float(
+                event.get(
+                    "mean_frp"
+                )
+            ),
+
+        "peak_frp":
+            safe_float(
+                event.get(
+                    "peak_frp"
+                )
+            ),
+
+        "total_frp":
+            safe_float(
+                event.get(
+                    "total_frp"
+                )
+            ),
+
+        "mean_brightness":
+            safe_float(
+                event.get(
+                    "mean_brightness"
+                )
+            ),
+
+        "persistent":
+            safe_float(
+                event.get(
+                    "persistent"
+                )
+            ),
+
+        "historical_detection_count":
+            safe_float(
+                event.get(
+                    "historical_detection_count"
+                )
+            ),
+
+        "historical_mean_frp":
+            safe_float(
+                event.get(
+                    "historical_mean_frp"
+                )
+            ),
+
+        "local_frp_deviation":
+            safe_float(
+                event.get(
+                    "local_frp_deviation"
+                )
+            ),
+
+        "historical_daily_activity":
+            safe_float(
+                event.get(
+                    "historical_daily_activity"
+                )
+            ),
+
+        "previously_detected":
+            safe_float(
+                event.get(
+                    "previously_detected"
+                )
+            ),
+
+        "anomaly_score":
+            safe_float(
+                event.get(
+                    "anomaly_score"
+                )
+            ),
+
+        "is_anomaly":
+            safe_bool(
+                event.get(
+                    "is_anomaly"
+                )
+            ),
+
+        "maps": {
+            "google_maps": (
+                "https://www.google.com/maps/search/"
+                f"?api=1&query="
+                f"{latitude},{longitude}"
+            ),
+
+            "openstreetmap": (
+                "https://www.openstreetmap.org/"
+                f"?mlat={latitude}"
+                f"&mlon={longitude}"
+                "&zoom=15"
+            ),
+        },
+    }
 
 
 # ============================================================
@@ -259,28 +523,34 @@ def load_model() -> None:
     global MODEL_AVAILABLE
 
     MODEL_AVAILABLE = False
+
     MODEL = None
 
     if not MODEL_PATH.exists():
 
         print(
-            f"[VEYRONIX] Model not found: {MODEL_PATH}"
+            f"[VEYRONIX] Model not found: "
+            f"{MODEL_PATH}"
         )
 
         return
 
     try:
 
-        MODEL = joblib.load(MODEL_PATH)
+        MODEL = joblib.load(
+            MODEL_PATH
+        )
 
         MODEL_AVAILABLE = True
 
         print(
-            "[VEYRONIX] LightGBM model loaded successfully."
+            "[VEYRONIX] LightGBM model "
+            "loaded successfully."
         )
 
         print(
-            f"[VEYRONIX] Model type: {type(MODEL)}"
+            f"[VEYRONIX] Model type: "
+            f"{type(MODEL)}"
         )
 
     except Exception as exc:
@@ -302,12 +572,14 @@ def load_latest_events_cache() -> None:
     global DATASET_AVAILABLE
 
     DATASET_AVAILABLE = False
+
     EVENT_CACHE = None
 
     if not DATASET_PATH.exists():
 
         print(
-            f"[VEYRONIX] Dataset not found: {DATASET_PATH}"
+            f"[VEYRONIX] Dataset not found: "
+            f"{DATASET_PATH}"
         )
 
         return
@@ -325,14 +597,20 @@ def load_latest_events_cache() -> None:
             ),
         )
 
-        # Ensure expected columns exist.
+        # ----------------------------------------------------
+        # Make sure expected columns exist
+        # ----------------------------------------------------
+
         for column in EVENT_COLUMNS:
 
             if column not in df.columns:
 
                 df[column] = np.nan
 
+        # ----------------------------------------------------
         # Event ID
+        # ----------------------------------------------------
+
         df["event_id"] = pd.to_numeric(
             df["event_id"],
             errors="coerce",
@@ -347,7 +625,10 @@ def load_latest_events_cache() -> None:
             .astype(int)
         )
 
+        # ----------------------------------------------------
         # Dates
+        # ----------------------------------------------------
+
         if "event_date" in df.columns:
 
             df["event_date"] = pd.to_datetime(
@@ -362,14 +643,30 @@ def load_latest_events_cache() -> None:
                 errors="coerce",
             )
 
-        # Sort chronologically.
+        if "end_time" in df.columns:
+
+            df["end_time"] = pd.to_datetime(
+                df["end_time"],
+                errors="coerce",
+            )
+
+        # ----------------------------------------------------
+        # Sort
+        # ----------------------------------------------------
+
         sort_columns = []
 
         if "event_date" in df.columns:
-            sort_columns.append("event_date")
+
+            sort_columns.append(
+                "event_date"
+            )
 
         if "start_time" in df.columns:
-            sort_columns.append("start_time")
+
+            sort_columns.append(
+                "start_time"
+            )
 
         if sort_columns:
 
@@ -378,13 +675,24 @@ def load_latest_events_cache() -> None:
                 ascending=True,
             )
 
-        # Keep unique events.
+        # ----------------------------------------------------
+        # Unique events
+        # ----------------------------------------------------
+
         df = df.drop_duplicates(
             subset=["event_id"],
             keep="last",
         )
 
-        # Keep newest 1000 events in memory.
+        # ----------------------------------------------------
+        # Keep newest 1000 events
+        #
+        # IMPORTANT:
+        # This cache is NOT the full corpus.
+        # Direct lookup can still search the
+        # complete CSV.
+        # ----------------------------------------------------
+
         df = df.tail(1000)
 
         EVENT_CACHE = df.reset_index(
@@ -394,14 +702,15 @@ def load_latest_events_cache() -> None:
         DATASET_AVAILABLE = True
 
         print(
-            f"[VEYRONIX] Event cache loaded: "
+            "[VEYRONIX] Event cache loaded: "
             f"{len(EVENT_CACHE)} events"
         )
 
     except Exception as exc:
 
         print(
-            "[VEYRONIX] Dataset cache loading failed:"
+            "[VEYRONIX] Dataset cache "
+            "loading failed:"
         )
 
         print(exc)
@@ -436,20 +745,27 @@ def get_event_from_cache(
 ) -> dict[str, Any] | None:
 
     if EVENT_CACHE is None:
+
         return None
 
     matches = EVENT_CACHE[
-        EVENT_CACHE["event_id"] == event_id
+        EVENT_CACHE["event_id"]
+        == event_id
     ]
 
     if matches.empty:
+
         return None
 
-    record = matches.iloc[-1].to_dict()
+    record = (
+        matches.iloc[-1]
+        .to_dict()
+    )
 
     return {
         key: json_safe(value)
-        for key, value in record.items()
+        for key, value
+        in record.items()
     }
 
 
@@ -458,9 +774,15 @@ def load_event_from_dataset(
 ) -> dict[str, Any] | None:
 
     if not DATASET_PATH.exists():
+
         return None
 
     try:
+
+        print(
+            f"[VEYRONIX] Full corpus lookup: "
+            f"event {event_id}"
+        )
 
         for chunk in pd.read_csv(
             DATASET_PATH,
@@ -468,24 +790,38 @@ def load_event_from_dataset(
         ):
 
             if "event_id" not in chunk.columns:
+
                 continue
 
-            chunk["event_id"] = pd.to_numeric(
-                chunk["event_id"],
-                errors="coerce",
+            chunk["event_id"] = (
+                pd.to_numeric(
+                    chunk["event_id"],
+                    errors="coerce",
+                )
             )
 
             matches = chunk[
-                chunk["event_id"] == event_id
+                chunk["event_id"]
+                == event_id
             ]
 
             if not matches.empty:
 
-                record = matches.iloc[0].to_dict()
+                record = (
+                    matches.iloc[0]
+                    .to_dict()
+                )
+
+                print(
+                    "[VEYRONIX] Event found "
+                    "in full corpus: "
+                    f"{event_id}"
+                )
 
                 return {
                     key: json_safe(value)
-                    for key, value in record.items()
+                    for key, value
+                    in record.items()
                 }
 
     except Exception as exc:
@@ -495,6 +831,11 @@ def load_event_from_dataset(
         )
 
         print(exc)
+
+    print(
+        "[VEYRONIX] Event not found: "
+        f"{event_id}"
+    )
 
     return None
 
@@ -508,6 +849,7 @@ def get_event(
     )
 
     if event is not None:
+
         return event
 
     return load_event_from_dataset(
@@ -528,7 +870,10 @@ def build_model_input(
     for feature in FEATURE_NAMES:
 
         row[feature] = safe_float(
-            event.get(feature, 0)
+            event.get(
+                feature,
+                0,
+            )
         )
 
     return pd.DataFrame(
@@ -545,13 +890,23 @@ def predict_event_source(
     event: dict[str, Any],
 ) -> dict[str, Any]:
 
-    if not MODEL_AVAILABLE or MODEL is None:
+    if (
+        not MODEL_AVAILABLE
+        or MODEL is None
+    ):
 
         return {
-            "predicted_source": "Uncertain",
-            "confidence": 0.0,
-            "probabilities": {},
-            "model_available": False,
+            "predicted_source":
+                "Uncertain",
+
+            "confidence":
+                0.0,
+
+            "probabilities":
+                {},
+
+            "model_available":
+                False,
         }
 
     try:
@@ -560,9 +915,9 @@ def predict_event_source(
             event
         )
 
-        probabilities_array = MODEL.predict_proba(
-            X
-        )[0]
+        probabilities_array = (
+            MODEL.predict_proba(X)[0]
+        )
 
         classes = MODEL.classes_
 
@@ -575,19 +930,28 @@ def predict_event_source(
             3: "Waste_Other",
         }
 
-        for class_id, probability in zip(
+        for (
+            class_id,
+            probability,
+        ) in zip(
             classes,
             probabilities_array,
         ):
 
-            class_id_int = int(class_id)
-
-            class_name = class_names.get(
-                class_id_int,
-                str(class_id_int),
+            class_id_int = int(
+                class_id
             )
 
-            probabilities[class_name] = round(
+            class_name = (
+                class_names.get(
+                    class_id_int,
+                    str(class_id_int),
+                )
+            )
+
+            probabilities[
+                class_name
+            ] = round(
                 float(probability),
                 4,
             )
@@ -602,9 +966,11 @@ def predict_event_source(
             classes[best_index]
         )
 
-        predicted_source = class_names.get(
-            best_class_id,
-            "Uncertain",
+        predicted_source = (
+            class_names.get(
+                best_class_id,
+                "Uncertain",
+            )
         )
 
         confidence = float(
@@ -614,13 +980,20 @@ def predict_event_source(
         )
 
         return {
-            "predicted_source": predicted_source,
-            "confidence": round(
-                confidence,
-                4,
-            ),
-            "probabilities": probabilities,
-            "model_available": True,
+            "predicted_source":
+                predicted_source,
+
+            "confidence":
+                round(
+                    confidence,
+                    4,
+                ),
+
+            "probabilities":
+                probabilities,
+
+            "model_available":
+                True,
         }
 
     except Exception as exc:
@@ -632,11 +1005,20 @@ def predict_event_source(
         print(exc)
 
         return {
-            "predicted_source": "Uncertain",
-            "confidence": 0.0,
-            "probabilities": {},
-            "model_available": True,
-            "error": str(exc),
+            "predicted_source":
+                "Uncertain",
+
+            "confidence":
+                0.0,
+
+            "probabilities":
+                {},
+
+            "model_available":
+                True,
+
+            "error":
+                str(exc),
         }
 
 
@@ -652,8 +1034,15 @@ def calculate_priority(
 
     score = (
         confidence * 60
-        + (30 if anomaly else 0)
-        + min(10, peak_frp / 10)
+        + (
+            30
+            if anomaly
+            else 0
+        )
+        + min(
+            10,
+            peak_frp / 10,
+        )
     )
 
     score = int(
@@ -667,15 +1056,19 @@ def calculate_priority(
     )
 
     if score >= 85:
+
         priority = "CRITICAL"
 
     elif score >= 70:
+
         priority = "HIGH"
 
     elif score >= 50:
+
         priority = "MEDIUM"
 
     else:
+
         priority = "LOW"
 
     return priority, score
@@ -689,12 +1082,26 @@ def calculate_priority(
 def root():
 
     return {
-        "service": APP_NAME,
-        "version": APP_VERSION,
-        "status": "running",
-        "docs": "/docs",
-        "health": "/health",
-        "events": "/events",
+        "service":
+            APP_NAME,
+
+        "version":
+            APP_VERSION,
+
+        "status":
+            "running",
+
+        "docs":
+            "/docs",
+
+        "health":
+            "/health",
+
+        "events":
+            "/events",
+
+        "event_lookup":
+            "/events/{event_id}",
     }
 
 
@@ -706,20 +1113,39 @@ def root():
 def health():
 
     return {
-        "status": "healthy",
-        "service": APP_NAME,
-        "version": APP_VERSION,
-        "model_available": MODEL_AVAILABLE,
-        "dataset_available": DATASET_AVAILABLE,
-        "api_key_configured": bool(
-            os.getenv("VEYRONIX_API_KEY")
-        ),
+        "status":
+            "healthy",
+
+        "service":
+            APP_NAME,
+
+        "version":
+            APP_VERSION,
+
+        "model_available":
+            MODEL_AVAILABLE,
+
+        "dataset_available":
+            DATASET_AVAILABLE,
+
+        "api_key_configured":
+            bool(
+                os.getenv(
+                    "VEYRONIX_API_KEY"
+                )
+            ),
+
         "authentication": (
             "enabled"
-            if os.getenv("VEYRONIX_API_KEY")
-            else "disabled_for_local_SIH_demo"
+            if os.getenv(
+                "VEYRONIX_API_KEY"
+            )
+            else
+            "disabled_for_local_SIH_demo"
         ),
-        "cors_enabled": True,
+
+        "cors_enabled":
+            True,
     }
 
 
@@ -737,11 +1163,21 @@ def model_info():
     )
 
     return {
-        "status": "success",
-        "model_available": MODEL_AVAILABLE,
-        "model_path": str(MODEL_PATH),
-        "model_type": model_type,
-        "features": FEATURE_NAMES,
+        "status":
+            "success",
+
+        "model_available":
+            MODEL_AVAILABLE,
+
+        "model_path":
+            str(MODEL_PATH),
+
+        "model_type":
+            model_type,
+
+        "features":
+            FEATURE_NAMES,
+
         "classes": [
             "Agriculture_Biomass",
             "Forest_Natural",
@@ -753,6 +1189,7 @@ def model_info():
 
 # ============================================================
 # EVENTS
+# INITIAL DASHBOARD DATA
 # ============================================================
 
 @app.get("/events")
@@ -770,7 +1207,9 @@ def events(
 
         raise HTTPException(
             status_code=503,
-            detail="Event dataset is unavailable.",
+            detail=(
+                "Event dataset is unavailable."
+            ),
         )
 
     # --------------------------------------------------------
@@ -783,9 +1222,11 @@ def events(
         and EVENT_CACHE is not None
     ):
 
-        result = EVENT_CACHE.tail(
-            limit
-        ).copy()
+        result = (
+            EVENT_CACHE
+            .tail(limit)
+            .copy()
+        )
 
     else:
 
@@ -798,7 +1239,11 @@ def events(
                 chunksize=50000,
             ):
 
-                if "event_id" not in chunk.columns:
+                if (
+                    "event_id"
+                    not in chunk.columns
+                ):
+
                     continue
 
                 if (
@@ -806,8 +1251,12 @@ def events(
                     or end_date is not None
                 ):
 
-                    chunk["event_date"] = pd.to_datetime(
-                        chunk["event_date"],
+                    chunk[
+                        "event_date"
+                    ] = pd.to_datetime(
+                        chunk[
+                            "event_date"
+                        ],
                         errors="coerce",
                     )
 
@@ -818,7 +1267,9 @@ def events(
                     )
 
                     chunk = chunk[
-                        chunk["event_date"]
+                        chunk[
+                            "event_date"
+                        ]
                         >= start
                     ]
 
@@ -829,13 +1280,17 @@ def events(
                     )
 
                     chunk = chunk[
-                        chunk["event_date"]
+                        chunk[
+                            "event_date"
+                        ]
                         <= end
                     ]
 
                 if not chunk.empty:
 
-                    frames.append(chunk)
+                    frames.append(
+                        chunk
+                    )
 
             if frames:
 
@@ -844,13 +1299,19 @@ def events(
                     ignore_index=True,
                 )
 
-                result = result.drop_duplicates(
-                    subset=["event_id"],
-                    keep="last",
+                result = (
+                    result
+                    .drop_duplicates(
+                        subset=[
+                            "event_id"
+                        ],
+                        keep="last",
+                    )
                 )
 
-                result = result.tail(
-                    limit
+                result = (
+                    result
+                    .tail(limit)
                 )
 
             else:
@@ -870,158 +1331,121 @@ def events(
     if result.empty:
 
         return {
-            "status": "success",
-            "count": 0,
-            "events": [],
+            "status":
+                "success",
+
+            "count":
+                0,
+
+            "events":
+                [],
         }
 
     # --------------------------------------------------------
-    # Build frontend-friendly response
+    # Build response
     # --------------------------------------------------------
 
     output = []
 
     for _, row in result.iterrows():
 
-        event_id = safe_int(
-            row.get("event_id")
-        )
-
-        latitude = safe_float(
-            row.get("latitude")
-        )
-
-        longitude = safe_float(
-            row.get("longitude")
-        )
-
-        event_date = row.get(
-            "event_date"
-        )
-
-        start_time = row.get(
-            "start_time"
-        )
-
-        end_time = row.get(
-            "end_time"
-        )
-
-        event_date_string = (
-            str(event_date.date())
-            if isinstance(
-                event_date,
-                pd.Timestamp,
-            )
-            else str(event_date)
-        )
-
-        start_time_string = (
-            str(start_time)
-            if not pd.isna(start_time)
-            else None
-        )
-
-        end_time_string = (
-            str(end_time)
-            if not pd.isna(end_time)
-            else None
-        )
+        raw_event = row.to_dict()
 
         output.append(
-            {
-                "event_id": event_id,
-                "latitude": latitude,
-                "longitude": longitude,
-                "event_date": event_date_string,
-                "start_time": start_time_string,
-                "end_time": end_time_string,
-
-                "observation_count": safe_float(
-                    row.get("observation_count")
-                ),
-
-                "mean_frp": safe_float(
-                    row.get("mean_frp")
-                ),
-
-                "peak_frp": safe_float(
-                    row.get("peak_frp")
-                ),
-
-                "total_frp": safe_float(
-                    row.get("total_frp")
-                ),
-
-                "mean_brightness": safe_float(
-                    row.get("mean_brightness")
-                ),
-
-                "persistent": safe_float(
-                    row.get("persistent")
-                ),
-
-                "historical_detection_count": safe_float(
-                    row.get(
-                        "historical_detection_count"
-                    )
-                ),
-
-                "historical_mean_frp": safe_float(
-                    row.get(
-                        "historical_mean_frp"
-                    )
-                ),
-
-                "local_frp_deviation": safe_float(
-                    row.get(
-                        "local_frp_deviation"
-                    )
-                ),
-
-                "historical_daily_activity": safe_float(
-                    row.get(
-                        "historical_daily_activity"
-                    )
-                ),
-
-                "previously_detected": safe_float(
-                    row.get(
-                        "previously_detected"
-                    )
-                ),
-
-                "anomaly_score": safe_float(
-                    row.get(
-                        "anomaly_score"
-                    )
-                ),
-
-                "is_anomaly": safe_bool(
-                    row.get(
-                        "is_anomaly"
-                    )
-                ),
-
-                "maps": {
-                    "google_maps": (
-                        "https://www.google.com/maps/search/"
-                        f"?api=1&query={latitude},{longitude}"
-                    ),
-                    "openstreetmap": (
-                        "https://www.openstreetmap.org/"
-                        f"?mlat={latitude}"
-                        f"&mlon={longitude}"
-                        "&zoom=15"
-                    ),
-                },
-            }
+            format_event(
+                raw_event
+            )
         )
 
     return {
-        "status": "success",
-        "count": len(output),
-        "events": output,
+        "status":
+            "success",
+
+        "count":
+            len(output),
+
+        "events":
+            output,
+    }
+
+
+# ============================================================
+# SINGLE EVENT LOOKUP
+# FULL CORPUS
+# ============================================================
+
+@app.get("/events/{event_id}")
+def event_by_id(
+    event_id: int,
+):
+    """
+    Fetch one event by ID.
+
+    Search order:
+
+    1. In-memory cache
+    2. Full CSV corpus
+
+    This means the dashboard can initially
+    load only 100 events while users can still
+    search the complete VEYRONIX dataset.
+    """
+
+    if not DATASET_PATH.exists():
+
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Event dataset is unavailable."
+            ),
+        )
+
+    # --------------------------------------------------------
+    # First search cache
+    # --------------------------------------------------------
+
+    event = get_event_from_cache(
+        event_id
+    )
+
+    # --------------------------------------------------------
+    # Then search complete CSV
+    # --------------------------------------------------------
+
+    if event is None:
+
+        event = load_event_from_dataset(
+            event_id
+        )
+
+    # --------------------------------------------------------
+    # Not found
+    # --------------------------------------------------------
+
+    if event is None:
+
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                f"Event {event_id} "
+                "not found in the VEYRONIX corpus."
+            ),
+        )
+
+    # --------------------------------------------------------
+    # Frontend response
+    # --------------------------------------------------------
+
+    formatted_event = format_event(
+        event
+    )
+
+    return {
+        "status":
+            "success",
+
+        "event":
+            formatted_event,
     }
 
 
@@ -1044,16 +1468,25 @@ def predict_event(
 
         raise HTTPException(
             status_code=404,
-            detail=f"Event {event_id} not found.",
+            detail=(
+                f"Event {event_id} "
+                "not found."
+            ),
         )
 
-    prediction = predict_event_source(
-        event
+    prediction = (
+        predict_event_source(
+            event
+        )
     )
 
     return {
-        "status": "success",
-        "event_id": event_id,
+        "status":
+            "success",
+
+        "event_id":
+            event_id,
+
         **prediction,
     }
 
@@ -1067,16 +1500,23 @@ def predict_batch(
     request: BatchEventRequest,
 ):
 
-    if len(request.event_ids) > 100:
+    if len(
+        request.event_ids
+    ) > 100:
 
         raise HTTPException(
             status_code=400,
-            detail="Maximum 100 events per batch.",
+            detail=(
+                "Maximum 100 events "
+                "per batch."
+            ),
         )
 
     predictions = []
 
-    for event_id in request.event_ids:
+    for event_id in (
+        request.event_ids
+    ):
 
         event = get_event(
             event_id
@@ -1086,29 +1526,43 @@ def predict_batch(
 
             predictions.append(
                 {
-                    "event_id": event_id,
-                    "status": "not_found",
+                    "event_id":
+                        event_id,
+
+                    "status":
+                        "not_found",
                 }
             )
 
             continue
 
-        prediction = predict_event_source(
-            event
+        prediction = (
+            predict_event_source(
+                event
+            )
         )
 
         predictions.append(
             {
-                "event_id": event_id,
-                "status": "success",
+                "event_id":
+                    event_id,
+
+                "status":
+                    "success",
+
                 **prediction,
             }
         )
 
     return {
-        "status": "success",
-        "count": len(predictions),
-        "predictions": predictions,
+        "status":
+            "success",
+
+        "count":
+            len(predictions),
+
+        "predictions":
+            predictions,
     }
 
 
@@ -1116,7 +1570,9 @@ def predict_batch(
 # EVENT ANALYSIS
 # ============================================================
 
-@app.get("/event-analysis/{event_id}")
+@app.get(
+    "/event-analysis/{event_id}"
+)
 def event_analysis(
     event_id: int,
 ):
@@ -1131,16 +1587,23 @@ def event_analysis(
 
         raise HTTPException(
             status_code=404,
-            detail=f"Event {event_id} not found.",
+            detail=(
+                f"Event {event_id} "
+                "not found."
+            ),
         )
 
-    prediction = predict_event_source(
-        event
+    prediction = (
+        predict_event_source(
+            event
+        )
     )
 
-    predicted_source = prediction.get(
-        "predicted_source",
-        "Uncertain",
+    predicted_source = (
+        prediction.get(
+            "predicted_source",
+            "Uncertain",
+        )
     )
 
     confidence = safe_float(
@@ -1150,9 +1613,11 @@ def event_analysis(
         )
     )
 
-    probabilities = prediction.get(
-        "probabilities",
-        {},
+    probabilities = (
+        prediction.get(
+            "probabilities",
+            {},
+        )
     )
 
     anomaly = safe_bool(
@@ -1176,10 +1641,12 @@ def event_analysis(
         )
     )
 
-    priority, priority_score = calculate_priority(
-        confidence,
-        anomaly,
-        peak_frp,
+    priority, priority_score = (
+        calculate_priority(
+            confidence,
+            anomaly,
+            peak_frp,
+        )
     )
 
     latitude = safe_float(
@@ -1203,12 +1670,14 @@ def event_analysis(
         source = "Uncertain"
 
         recommendation = (
-            "Additional satellite and contextual evidence "
-            "is required before source attribution."
+            "Additional satellite and "
+            "contextual evidence is required "
+            "before source attribution."
         )
 
         message = (
-            "Evidence is insufficient for reliable source attribution."
+            "Evidence is insufficient "
+            "for reliable source attribution."
         )
 
     else:
@@ -1216,35 +1685,46 @@ def event_analysis(
         source = predicted_source
 
         recommendation = (
-            "Review satellite evidence, OSM context, "
-            "historical behaviour and investigator observations."
+            "Review satellite evidence, "
+            "OSM context, historical behaviour "
+            "and investigator observations."
         )
 
         message = (
-            f"VEYRONIX predicts {predicted_source} "
-            f"with {confidence * 100:.1f}% model confidence."
+            f"VEYRONIX predicts "
+            f"{predicted_source} "
+            f"with "
+            f"{confidence * 100:.1f}% "
+            f"model confidence."
         )
 
     evidence = [
         (
-            "NASA FIRMS thermal event detected at "
-            f"{latitude:.4f}, {longitude:.4f}"
+            "NASA FIRMS thermal event detected "
+            f"at {latitude:.4f}, "
+            f"{longitude:.4f}"
         ),
+
         (
-            f"Peak FRP: {peak_frp:.1f} MW"
+            f"Peak FRP: "
+            f"{peak_frp:.1f} MW"
         ),
+
         (
             "Observation count: "
             f"{safe_float(event.get('observation_count')):.0f}"
         ),
+
         (
             "Mean brightness: "
             f"{safe_float(event.get('mean_brightness')):.1f} K"
         ),
+
         (
             "Persistent event: "
             f"{'Yes' if safe_bool(event.get('persistent')) else 'No'}"
         ),
+
         (
             "Anomaly status: "
             f"{'Anomalous' if anomaly else 'Not anomalous'}"
@@ -1254,13 +1734,15 @@ def event_analysis(
     if source != "Uncertain":
 
         evidence.append(
-            f"VEYRONIX ML prediction: {source}"
+            f"VEYRONIX ML prediction: "
+            f"{source}"
         )
 
     else:
 
         evidence.append(
-            "Source attribution remains uncertain."
+            "Source attribution "
+            "remains uncertain."
         )
 
     elapsed_ms = (
@@ -1269,21 +1751,32 @@ def event_analysis(
     ) * 1000
 
     return {
-        "status": "success",
+        "status":
+            "success",
 
-        "event_id": event_id,
+        "event_id":
+            event_id,
 
-        "latitude": latitude,
-        "longitude": longitude,
+        "latitude":
+            latitude,
 
-        "event": event,
+        "longitude":
+            longitude,
 
-        "source": source,
-        "predicted_source": predicted_source,
+        "event":
+            event,
 
-        "confidence": confidence,
+        "source":
+            source,
 
-        "source_probabilities": probabilities,
+        "predicted_source":
+            predicted_source,
+
+        "confidence":
+            confidence,
+
+        "source_probabilities":
+            probabilities,
 
         "abnormality": (
             "HIGH"
@@ -1291,45 +1784,58 @@ def event_analysis(
             else "LOW"
         ),
 
-        "abnormality_score": round(
-            anomaly_score * 100,
-            2,
-        ),
+        "abnormality_score":
+            round(
+                anomaly_score * 100,
+                2,
+            ),
 
-        "priority": priority,
-        "priority_score": priority_score,
+        "priority":
+            priority,
 
-        "evidence": evidence,
+        "priority_score":
+            priority_score,
 
-        "insufficient_evidence": (
-            insufficient_evidence
-        ),
+        "evidence":
+            evidence,
 
-        "message": message,
+        "insufficient_evidence":
+            insufficient_evidence,
 
-        "recommendation": recommendation,
+        "message":
+            message,
+
+        "recommendation":
+            recommendation,
 
         "anomaly": {
-            "is_anomaly": anomaly,
-            "anomaly_score": anomaly_score,
+            "is_anomaly":
+                anomaly,
+
+            "anomaly_score":
+                anomaly_score,
         },
 
         "sentinel": {
-            "status": "pending",
+            "status":
+                "pending",
+
             "message": (
-                "Sentinel evidence can be requested "
-                "for this event."
+                "Sentinel evidence can be "
+                "requested for this event."
             ),
         },
 
-        "analysis_timestamp": pd.Timestamp.now(
-            tz="UTC"
-        ).isoformat(),
+        "analysis_timestamp":
+            pd.Timestamp.now(
+                tz="UTC"
+            ).isoformat(),
 
-        "processing_latency_ms": round(
-            elapsed_ms,
-            2,
-        ),
+        "processing_latency_ms":
+            round(
+                elapsed_ms,
+                2,
+            ),
     }
 
 
@@ -1337,7 +1843,9 @@ def event_analysis(
 # SENTINEL ENDPOINTS
 # ============================================================
 
-@app.get("/sentinel/{event_id}")
+@app.get(
+    "/sentinel/{event_id}"
+)
 def sentinel_event(
     event_id: int,
 ):
@@ -1350,21 +1858,33 @@ def sentinel_event(
 
         raise HTTPException(
             status_code=404,
-            detail=f"Event {event_id} not found.",
+            detail=(
+                f"Event {event_id} "
+                "not found."
+            ),
         )
 
     return {
-        "status": "success",
-        "event_id": event_id,
-        "sentinel_available": False,
+        "status":
+            "success",
+
+        "event_id":
+            event_id,
+
+        "sentinel_available":
+            False,
+
         "message": (
-            "Sentinel evidence integration is available "
-            "through the VEYRONIX satellite evidence pipeline."
+            "Sentinel evidence integration "
+            "is available through the VEYRONIX "
+            "satellite evidence pipeline."
         ),
     }
 
 
-@app.get("/sentinel/{event_id}/files")
+@app.get(
+    "/sentinel/{event_id}/files"
+)
 def sentinel_files(
     event_id: int,
 ):
@@ -1377,21 +1897,33 @@ def sentinel_files(
 
         raise HTTPException(
             status_code=404,
-            detail=f"Event {event_id} not found.",
+            detail=(
+                f"Event {event_id} "
+                "not found."
+            ),
         )
 
     return {
-        "status": "success",
-        "event_id": event_id,
-        "files": [],
+        "status":
+            "success",
+
+        "event_id":
+            event_id,
+
+        "files":
+            [],
+
         "message": (
-            "No Sentinel files are currently attached "
+            "No Sentinel files are "
+            "currently attached "
             "to this event."
         ),
     }
 
 
-@app.get("/sentinel/{event_id}/evidence")
+@app.get(
+    "/sentinel/{event_id}/evidence"
+)
 def sentinel_evidence(
     event_id: int,
 ):
@@ -1404,22 +1936,36 @@ def sentinel_evidence(
 
         raise HTTPException(
             status_code=404,
-            detail=f"Event {event_id} not found.",
+            detail=(
+                f"Event {event_id} "
+                "not found."
+            ),
         )
 
     return {
-        "status": "success",
-        "event_id": event_id,
-        "available": False,
-        "evidence": [],
+        "status":
+            "success",
+
+        "event_id":
+            event_id,
+
+        "available":
+            False,
+
+        "evidence":
+            [],
+
         "message": (
-            "High-resolution Sentinel evidence "
-            "is not currently attached to this event."
+            "High-resolution Sentinel "
+            "evidence is not currently "
+            "attached to this event."
         ),
     }
 
 
-@app.get("/sentinel/{event_id}/visualizations")
+@app.get(
+    "/sentinel/{event_id}/visualizations"
+)
 def sentinel_visualizations(
     event_id: int,
 ):
@@ -1432,16 +1978,26 @@ def sentinel_visualizations(
 
         raise HTTPException(
             status_code=404,
-            detail=f"Event {event_id} not found.",
+            detail=(
+                f"Event {event_id} "
+                "not found."
+            ),
         )
 
     return {
-        "status": "success",
-        "event_id": event_id,
-        "visualizations": [],
+        "status":
+            "success",
+
+        "event_id":
+            event_id,
+
+        "visualizations":
+            [],
+
         "message": (
-            "No Sentinel visualizations are currently "
-            "attached to this event."
+            "No Sentinel visualizations "
+            "are currently attached "
+            "to this event."
         ),
     }
 
@@ -1462,17 +2018,29 @@ def sentinel_visualization(
 
         raise HTTPException(
             status_code=404,
-            detail=f"Event {event_id} not found.",
+            detail=(
+                f"Event {event_id} "
+                "not found."
+            ),
         )
 
     return {
-        "status": "success",
-        "event_id": event_id,
-        "visualization_type": visualization_type,
-        "available": False,
+        "status":
+            "success",
+
+        "event_id":
+            event_id,
+
+        "visualization_type":
+            visualization_type,
+
+        "available":
+            False,
+
         "message": (
-            "Requested Sentinel visualization "
-            "is not currently attached."
+            "Requested Sentinel "
+            "visualization is not "
+            "currently attached."
         ),
     }
 
@@ -1481,24 +2049,32 @@ def sentinel_visualization(
 # SERVER INFO
 # ============================================================
 
-@app.get("/server-info")
+@app.get(
+    "/server-info"
+)
 def server_info():
 
     return {
-        "service": APP_NAME,
-        "version": APP_VERSION,
-        "status": "running",
+        "service":
+            APP_NAME,
 
-        "model_available": MODEL_AVAILABLE,
-        "dataset_available": DATASET_AVAILABLE,
+        "version":
+            APP_VERSION,
 
-        "model_path": str(
-            MODEL_PATH
-        ),
+        "status":
+            "running",
 
-        "dataset_path": str(
-            DATASET_PATH
-        ),
+        "model_available":
+            MODEL_AVAILABLE,
+
+        "dataset_available":
+            DATASET_AVAILABLE,
+
+        "model_path":
+            str(MODEL_PATH),
+
+        "dataset_path":
+            str(DATASET_PATH),
 
         "cached_events": (
             len(EVENT_CACHE)
@@ -1507,9 +2083,14 @@ def server_info():
         ),
 
         "cors": {
-            "enabled": True,
-            "allow_origins": ["*"],
-            "allow_credentials": False,
+            "enabled":
+                True,
+
+            "allow_origins":
+                ["*"],
+
+            "allow_credentials":
+                False,
         },
 
         "endpoints": [
@@ -1517,6 +2098,7 @@ def server_info():
             "/health",
             "/model-info",
             "/events",
+            "/events/{event_id}",
             "/predict",
             "/predict-event",
             "/predict-batch",
@@ -1525,6 +2107,7 @@ def server_info():
             "/sentinel/{event_id}/files",
             "/sentinel/{event_id}/evidence",
             "/sentinel/{event_id}/visualizations",
+            "/sentinel/{event_id}/visualizations/{visualization_type}",
             "/server-info",
         ],
     }
@@ -1534,18 +2117,24 @@ def server_info():
 # GENERIC PREDICT ENDPOINT
 # ============================================================
 
-@app.post("/predict")
+@app.post(
+    "/predict"
+)
 def predict(
     event: ThermalEvent,
 ):
 
     event_dict = event.model_dump()
 
-    prediction = predict_event_source(
-        event_dict
+    prediction = (
+        predict_event_source(
+            event_dict
+        )
     )
 
     return {
-        "status": "success",
+        "status":
+            "success",
+
         **prediction,
     }
